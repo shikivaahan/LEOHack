@@ -53,18 +53,18 @@ e -> rotate right
 
 And voilla! You are controlling the robot. Now you can make your own modifications to it :) 
 
-## Real-Time QR Tracking & Recording
+## Real-Time AprilTag Tracking & Recording
 
-The script `src/qr_stream_app.py` provides real-time video ingestion, QR detection, pose estimation (yaw/pitch/roll), and bearing calculation relative to the camera optical axis. It overlays diagnostics, draws a center crosshair, and can record annotated video for debugging.
+The script `src/qr_stream_app.py` provides real-time video ingestion, AprilTag detection, pose estimation (yaw/pitch/roll), and bearing calculation relative to the camera optical axis. It overlays diagnostics, draws a center crosshair, and can record annotated video for debugging.
 
 ### Features
 
 - Stream from local webcam (index), HTTP/RTSP URL, or video file path.
-- Multi-QR detection using OpenCV `QRCodeDetector`.
+- AprilTag detection using OpenCV ArUco AprilTag dictionaries (e.g. 36h11).
 - Crosshair overlay at frame center.
-- Pose estimation of the QR plane via `solvePnP` (uses IPPE square when available).
+- Pose estimation of the tag plane via `solvePnP` (uses IPPE square when available).
 - Bearing (angular offset) from center in X and Y.
-- Per-frame overlay of orientation, bearing, and raw QR payload.
+- Per-frame overlay of orientation, bearing, and tag id.
 - Optional mirroring for operator-friendly display.
 - Adjustable assumed horizontal Field Of View (FOV) if camera specs differ.
 - Video recording with common codecs fallback logic.
@@ -82,19 +82,19 @@ pip install opencv-python numpy
 Webcam (default index 0):
 
 ```pwsh
-python src/qr_stream_app.py --url 0 --display --record
+python src/qr_stream_app.py --url 0 --display --record --tag-family 36h11 --tag-size 0.10
 ```
 
 HTTP/RTSP stream:
 
 ```pwsh
-python src/qr_stream_app.py --url http://192.168.0.10:8080/video --fov 65 --record
+python src/qr_stream_app.py --url http://192.168.0.10:8080/video --fov 65 --record --tag-size 0.10
 ```
 
 Video file for offline processing:
 
 ```pwsh
-python src/qr_stream_app.py --url sample_clip.mp4 --no-display --out processed_clip --record
+python src/qr_stream_app.py --url sample_clip.mp4 --no-display --out processed_clip --record --tag-size 0.10
 ```
 
 If you want to disable recording entirely:
@@ -106,7 +106,7 @@ python src/qr_stream_app.py --url 0 --no-record
 Adjust QR physical size (edge length meters) for more accurate pose:
 
 ```pwsh
-python src/qr_stream_app.py --url 0 --qr-size 0.08
+python src/qr_stream_app.py --url 0 --tag-size 0.08
 ```
 
 Mirror the view (useful for operator perspective):
@@ -117,7 +117,7 @@ python src/qr_stream_app.py --url 0 --mirror
 
 ### Notes on Pose & Bearing
 
-Pose estimation assumes a pinhole camera model with focal length inferred from the provided horizontal FOV. If your camera FOV differs, pass `--fov` for better angular accuracy. The QR code 3D model is a flat square lying on Z=0 plane, centered at origin; IPPE improves stability for planar patterns when available.
+Pose estimation assumes a pinhole camera model with focal length inferred from the provided horizontal FOV. If your camera FOV differs, pass `--fov` for better angular accuracy. The AprilTag 3D model is a flat square lying on Z=0 plane, centered at origin; IPPE improves stability for planar patterns when available.
 
 Bearing angles are computed by projecting pixel offsets from the image center through the focal length. They are approximate if lens distortion is significant (we assume negligible distortion). For refined results, integrate a calibration step to obtain accurate `fx`, `fy`, `cx`, `cy`, and distortion coefficients.
 

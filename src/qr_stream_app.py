@@ -19,7 +19,7 @@ class CameraIntrinsics:
 
 
 @dataclass
-class QRPose:
+class TagPose:
     yaw_deg: float
     pitch_deg: float
     roll_deg: float
@@ -30,15 +30,17 @@ class QRPose:
 
 
 def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Real-time QR tracker and recorder")
+    p = argparse.ArgumentParser(description="Real-time AprilTag tracker and recorder")
     p.add_argument("--url", required=False, default=0,
                    help="HTTP/RTSP URL, file path, or camera index (default 0)")
-    p.add_argument("--out", required=False, default="qr_debug.mp4",
+    p.add_argument("--out", required=False, default="tag_debug.mp4",
                    help="Output video file (mp4/avi). Set empty to disable recording.")
     p.add_argument("--fov", type=float, default=75.0,
                    help="Horizontal field of view in degrees (default 75)")
-    p.add_argument("--qr-size", type=float, default=0.1,
-                   help="Physical size of QR code edge in meters (default 0.1 m ~ 10 cm). Measure outer edge for accuracy.")
+    p.add_argument("--tag-size", type=float, default=0.1,
+                   help="Physical size of AprilTag (edge length) in meters (default 0.1 m ~ 10 cm). Measure printed tag border.")
+    p.add_argument("--tag-family", type=str, default="36h11",
+                   help="AprilTag family (36h11, 25h9, 16h5). Default 36h11.")
     p.add_argument("--display", action="store_true", help="Show live window")
     p.add_argument("--no-display", dest="display", action="store_false", help="Disable live window")
     p.add_argument("--record", action="store_true", help="Enable recording to --out file")
@@ -48,7 +50,7 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     p.add_argument("--mirror", action="store_true", help="Mirror display horizontally (selfie view)")
     p.add_argument("--font-scale", type=float, default=0.6, help="Overlay text scale")
     # Exposure / brightness controls
-    p.add_argument("--auto-exposure", choices=["on", "off"], default="off",
+    p.add_argument("--auto-exposure", choices=["on", "off"], default="on",
                    help="Toggle camera auto-exposure (default off)")
     p.add_argument("--exposure", type=float, default=-5.0,
                    help="Manual exposure value (driver-specific, default -5.0)")
@@ -115,20 +117,20 @@ def refine_corners(gray: np.ndarray, pts: np.ndarray) -> np.ndarray:
     return pts_ref.reshape(-1, 2)
 
 
-def solve_qr_pose(
+def solve_tag_pose(
     img_pts: np.ndarray,
     intr: CameraIntrinsics,
-    qr_size_m: float,
+    tag_size_m: float,
     last_rvec: Optional[np.ndarray] = None,
     last_tvec: Optional[np.ndarray] = None,
     smooth_alpha: float = 0.2,
-) -> Tuple[Optional[QRPose], Optional[np.ndarray]]:
+) -> Tuple[Optional[TagPose], Optional[np.ndarray]]:
     """
     img_pts: (4,2) float32 in order TL,TR,BR,BL
     returns (QRPose or None, R (3x3) or None)
     """
     # 3D points of square in its own coord frame, centered at origin
-    s = qr_size_m / 2.0
+    s = tag_size_m / 2.0
     obj_pts = np.array([
         [-s, -s, 0.0],
         [ s, -s, 0.0],
@@ -231,7 +233,7 @@ def solve_qr_pose(
     bearing_x = math.degrees(math.atan2(float(ray[0]), 1.0))
     bearing_y = math.degrees(math.atan2(float(-ray[1]), 1.0))
 
-    pose = QRPose(
+    pose = TagPose(
         yaw_deg=yaw_deg,
         pitch_deg=pitch_deg,
         roll_deg=roll_deg,
@@ -311,9 +313,20 @@ def main(argv: Optional[List[str]] = None) -> int:
     except Exception:
         pass
 
-    qrdet = cv2.QRCodeDetector()
+    # AprilTag dictionary selection
+    family_map = {
+        "36h11": cv2.aruco.DICT_APRILTAG_36h11,
+        "25h9": cv2.aruco.DICT_APRILTAG_25h9,
+        "16h5": cv2.aruco.DICT_APRILTAG_16h5,
+    }
+    fam_key = args.tag_family.lower()
+    if fam_key not in family_map:
+        print(f"WARNING: Unknown tag family '{args.tag_family}', falling back to 36h11")
+        fam_key = "36h11"
+    dictionary = cv2.aruco.getPredefinedDictionary(family_map[fam_key])
+    detector_params = cv2.aruco.DetectorParameters()
     ippe_available = hasattr(cv2, 'solvePnPGeneric') and hasattr(cv2, 'SOLVEPNP_IPPE_SQUARE')
-    print(f"PnP method: {'IPPE_SQUARE' if ippe_available else 'ITERATIVE'} (auto-exposure={args.auto_exposure})")
+    print(f"PnP method: {'IPPE_SQUARE' if ippe_available else 'ITERATIVE'} | AprilTag family={fam_key} | auto-exposure={args.auto_exposure}")
 
     # Determine frame size and intrinsics from first frame
     grabbed, frame = cap.read()
@@ -344,8 +357,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(f"Recording to {out_path_actual}")
 
     if args.display:
-        cv2.namedWindow("QR Tracker", cv2.WINDOW_NORMAL)
-        cv2.resizeWindow("QR Tracker", min(w, 1280), min(h, 720))
+        cv2.namedWindow("AprilTag Tracker", cv2.WINDOW_NORMAL)
+        cv2.resizeWindow("AprilTag Tracker", min(w, 1280), min(h, 720))
 
     # Main loop
     t0 = time.time()
@@ -373,34 +386,24 @@ def main(argv: Optional[List[str]] = None) -> int:
         frame_proc = frame
         gray = cv2.cvtColor(frame_proc, cv2.COLOR_BGR2GRAY)
 
-        # QR detection (multi)
-        data_list = []
-        bbox_list = []
-        try:
-            retval, decoded_info, points, _ = qrdet.detectAndDecodeMulti(frame_proc)
-            if retval and points is not None and len(points) > 0:
-                for i, p in enumerate(points):
-                    # p shape (4,1,2) or (4,2)
-                    pts = p.reshape(-1, 2).astype(np.float32)
-                    ordered = order_corners(pts)
-                    ordered = refine_corners(gray, ordered)
-                    bbox_list.append(ordered)
-                    data_list.append(decoded_info[i] if i < len(decoded_info) else "")
-        except cv2.error:
-            # fall back to single detect
-            data, pts, _ = qrdet.detectAndDecode(frame_proc)
-            if pts is not None and len(pts) == 4:
-                ordered = order_corners(pts.reshape(-1, 2).astype(np.float32))
+        # AprilTag detection
+        tag_ids: List[int] = []
+        bbox_list: List[np.ndarray] = []
+        corners, ids, rejected = cv2.aruco.detectMarkers(frame_proc, dictionary, parameters=detector_params)
+        if ids is not None and len(corners) > 0:
+            for corner, id_arr in zip(corners, ids):
+                pts = corner[0].astype(np.float32)  # shape (4,2) already TL,TR,BR,BL
+                ordered = order_corners(pts)
                 ordered = refine_corners(gray, ordered)
                 bbox_list.append(ordered)
-                data_list.append(data)
+                tag_ids.append(int(id_arr[0]))
 
         # Prepare overlay on processing frame
         overlay_proc = frame_proc.copy()
         # Draw crosshair
         draw_crosshair(overlay_proc, color=(0, 200, 0))
 
-        # For each QR, draw and compute pose/bearing
+    # For each AprilTag, draw and compute pose/bearing
         info_lines = [
             f"Frame: {frames}",
         ]
@@ -413,15 +416,15 @@ def main(argv: Optional[List[str]] = None) -> int:
             cyi = int(pts[:, 1].mean())
             cv2.circle(overlay_proc, (cxi, cyi), 4, (255, 0, 255), -1, cv2.LINE_AA)
 
-            pose, R = solve_qr_pose(pts, intr, args.qr_size, last_rvec, last_tvec, args.smooth_alpha)
-            label = data_list[idx] if idx < len(data_list) else ""
+            pose, R = solve_tag_pose(pts, intr, args.tag_size, last_rvec, last_tvec, args.smooth_alpha)
+            tag_id = tag_ids[idx] if idx < len(tag_ids) else -1
 
             if pose is not None:
                 last_rvec = pose.rvec
                 last_tvec = pose.tvec
                 # Draw axes on the QR for visualization
                 K = np.array([[intr.fx, 0, intr.cx], [0, intr.fy, intr.cy], [0, 0, 1]], dtype=np.float32)
-                axis_len = float(args.qr_size * 0.75)
+                axis_len = float(args.tag_size * 0.75)
                 axis = np.array(
                     [[0.0, 0.0, 0.0], [axis_len, 0.0, 0.0], [0.0, axis_len, 0.0], [0.0, 0.0, axis_len]],
                     dtype=np.float32,
@@ -438,15 +441,15 @@ def main(argv: Optional[List[str]] = None) -> int:
                         pass
 
                 # Text near QR
-                txt = f"QR[{idx}] yaw={pose.yaw_deg:+.1f} pitch={pose.pitch_deg:+.1f} roll={pose.roll_deg:+.1f} | bearing x={pose.bearing_x_deg:+.1f} y={pose.bearing_y_deg:+.1f}"
+                txt = f"Tag id={tag_id} yaw={pose.yaw_deg:+.1f} pitch={pose.pitch_deg:+.1f} roll={pose.roll_deg:+.1f} | bearing x={pose.bearing_x_deg:+.1f} y={pose.bearing_y_deg:+.1f}"
                 cv2.putText(overlay_proc, txt, (max(5, cxi - 120), max(15, cyi - 10)), cv2.FONT_HERSHEY_SIMPLEX,
                             args.font_scale, (0, 0, 0), 3, cv2.LINE_AA)
                 cv2.putText(overlay_proc, txt, (max(5, cxi - 120), max(15, cyi - 10)), cv2.FONT_HERSHEY_SIMPLEX,
                             args.font_scale, (255, 255, 255), 1, cv2.LINE_AA)
 
-                info_lines.append(f"QR[{idx}]: data='{label}' | yaw={pose.yaw_deg:+.1f} pitch={pose.pitch_deg:+.1f} roll={pose.roll_deg:+.1f} | bearing x={pose.bearing_x_deg:+.1f} y={pose.bearing_y_deg:+.1f}")
+                info_lines.append(f"Tag[{tag_id}]: yaw={pose.yaw_deg:+.1f} pitch={pose.pitch_deg:+.1f} roll={pose.roll_deg:+.1f} | bearing x={pose.bearing_x_deg:+.1f} y={pose.bearing_y_deg:+.1f}")
             else:
-                info_lines.append(f"QR[{idx}]: data='{label}' | pose=N/A")
+                info_lines.append(f"Tag[{tag_id}]: pose=N/A")
 
         # Overlay info
         put_text_lines(overlay_proc, info_lines, origin=(10, 28), scale=args.font_scale)
@@ -457,7 +460,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         frame_out = cv2.flip(frame_out_proc, 1) if args.mirror else frame_out_proc
 
         if args.display:
-            cv2.imshow("QR Tracker", frame_out)
+            cv2.imshow("AprilTag Tracker", frame_out)
             key = cv2.waitKey(1) & 0xFF
             if key == ord('q') or key == 27:
                 break
