@@ -39,8 +39,8 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
                    help="Horizontal field of view in degrees (default 75)")
     p.add_argument("--tag-size", type=float, default=0.1,
                    help="Physical size of AprilTag (edge length) in meters (default 0.1 m ~ 10 cm). Measure printed tag border.")
-    p.add_argument("--tag-family", type=str, default="36h11",
-                   help="AprilTag family (36h11, 25h9, 16h5). Default 36h11.")
+    p.add_argument("--tag-family", type=str, default="auto",
+                   help="AprilTag family (auto, 36h11, 25h9, 16h5). 'auto' tries to detect on initial frames.")
     p.add_argument("--display", action="store_true", help="Show live window")
     p.add_argument("--no-display", dest="display", action="store_false", help="Disable live window")
     p.add_argument("--record", action="store_true", help="Enable recording to --out file")
@@ -313,20 +313,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     except Exception:
         pass
 
-    # AprilTag dictionary selection
+    # AprilTag dictionary selection (auto option)
     family_map = {
         "36h11": cv2.aruco.DICT_APRILTAG_36h11,
         "25h9": cv2.aruco.DICT_APRILTAG_25h9,
         "16h5": cv2.aruco.DICT_APRILTAG_16h5,
     }
-    fam_key = args.tag_family.lower()
-    if fam_key not in family_map:
-        print(f"WARNING: Unknown tag family '{args.tag_family}', falling back to 36h11")
-        fam_key = "36h11"
-    dictionary = cv2.aruco.getPredefinedDictionary(family_map[fam_key])
+    requested_family = args.tag_family.lower()
     detector_params = cv2.aruco.DetectorParameters()
     ippe_available = hasattr(cv2, 'solvePnPGeneric') and hasattr(cv2, 'SOLVEPNP_IPPE_SQUARE')
-    print(f"PnP method: {'IPPE_SQUARE' if ippe_available else 'ITERATIVE'} | AprilTag family={fam_key} | auto-exposure={args.auto_exposure}")
 
     # Determine frame size and intrinsics from first frame
     grabbed, frame = cap.read()
@@ -338,6 +333,36 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.max_width and frame.shape[1] > args.max_width:
         scale = args.max_width / frame.shape[1]
         frame = cv2.resize(frame, (int(frame.shape[1] * scale), int(frame.shape[0] * scale)))
+
+    # Auto family detection (use first frame or a few attempts if requested_family == 'auto')
+    if requested_family == 'auto':
+        gray_auto = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        detected_family = None
+        best_count = 0
+        for fam_key_try, dict_id in family_map.items():
+            dict_try = cv2.aruco.getPredefinedDictionary(dict_id)
+            corners_try, ids_try, _ = cv2.aruco.detectMarkers(gray_auto, dict_try, parameters=detector_params)
+            count = 0 if ids_try is None else len(ids_try)
+            if count > best_count:
+                best_count = count
+                detected_family = fam_key_try
+            if best_count > 0:  # early exit on first positive match
+                break
+        if detected_family is None:
+            detected_family = '36h11'  # fallback
+            print("AprilTag auto-detect: No tags found on initial frame; defaulting to 36h11")
+        else:
+            print(f"AprilTag auto-detect selected family: {detected_family} (detections={best_count})")
+        fam_key_runtime = detected_family
+    else:
+        if requested_family not in family_map:
+            print(f"WARNING: Unknown tag family '{args.tag_family}', falling back to 36h11")
+            fam_key_runtime = '36h11'
+        else:
+            fam_key_runtime = requested_family
+
+    dictionary = cv2.aruco.getPredefinedDictionary(family_map[fam_key_runtime])
+    print(f"PnP method: {'IPPE_SQUARE' if ippe_available else 'ITERATIVE'} | AprilTag family={fam_key_runtime} | auto-exposure={args.auto_exposure}")
 
     h, w = frame.shape[:2]
     intr = compute_intrinsics(w, h, args.fov)
