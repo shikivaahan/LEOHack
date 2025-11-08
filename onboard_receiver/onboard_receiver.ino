@@ -4,192 +4,150 @@
 #include "motor_control.h"
 #include "student_functions.h"
 
-char ssid[] = "Nano_[YOUR_NAME]_AP";
+// ===== Wi-Fi setup =====
+char ssid[] = "Nano_12345678_AP";
 char pass[] = "nano1pwd";
 
 int status = WL_IDLE_STATUS;
 WiFiServer server(8080);  // TCP server on port 8080
 
+// ===== Ultrasonic setup =====
+const int trigPin = 12;
+const int echoPin = 11;
+long duration;
+int distance;
 
-void setup() { 
-  Serial.begin(9600); //initialising serial connection
+// ===== Function to read ultrasonic distance =====
+int readDistance() {
+  digitalWrite(trigPin, LOW);
+  delayMicroseconds(2);
+
+  digitalWrite(trigPin, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(trigPin, LOW);
+
+  duration = pulseIn(echoPin, HIGH, 30000); // timeout to avoid lockup
+  if (duration == 0) return -1; // no echo received
+  distance = duration * 0.034 / 2; // speed of sound in cm/us
+  return distance;
+}
+
+// ===== Setup =====
+void setup() {
+  Serial.begin(9600);
+
+  // --- Ultrasonic pins ---
+  pinMode(trigPin, OUTPUT);
+  pinMode(echoPin, INPUT);
 
   Serial.println("Creating an access point...");
-
-  status = WiFi.beginAP(ssid, pass); //setting up the AP
-  if (status != WL_AP_LISTENING){
+  status = WiFi.beginAP(ssid, pass);
+  if (status != WL_AP_LISTENING) {
     Serial.println("Failed to start AP");
-    //while(true); //stop if failed
   }
 
-  delay(5000); //allow the AP to initialise
+  delay(5000); // allow AP to initialize
 
   IPAddress ip = WiFi.localIP();
   Serial.print("AP IP Address: ");
   Serial.println(ip);
 
   server.begin();
-  servo_init();
 
+  // initialize servos and motors
+  servo_init();
   motor_init();
 }
 
+// ===== Main loop =====
 void loop() {
   WiFiClient client = server.available(); // Listen for incoming clients
 
   if (client) {
     Serial.println("New client connected.");
-    while (client.connected()) {
-      if (client.available()) {
-        char c = client.read();
-        Serial.write(c);         // Print to serial monitor
+    unsigned long lastSend = millis();
 
-        //checking if one of standard commands
+    while (client.connected()) {
+      // --- Handle incoming control commands ---
+      while (client.available()) {
+        char c = client.read();
+        Serial.write(c);
+
         if (c == 's') {
-          //STOP
-          // call the stop function here
           stop();
           Serial.println("Motors Stopped");
         }
-        if (c == 'f') {
-          //MOVE FORWARD
-          //expecting a format of '[power (0-9)] [time (0-9)]'
-          char space1 = client.read(); //empty space read
-          char power = client.read();
-          char space2 = client.read(); //empty space read
-          char time = client.read();
-
-          String outputmessage = "Going forward at power and time: ";
-          outputmessage += power;
-          outputmessage += ' ';
-          outputmessage += time;
-          Serial.println(outputmessage);
-
-          //converting the chars to ints
-          int itime = time - '0';
-          int ipower = power - '0';
-
-          go_forward(ipower, itime);
+        else if (c == 'f') {
+          char _ = client.read(); // skip space
+          int power = client.read() - '0';
+          _ = client.read();
+          int time = client.read() - '0';
+          go_forward(power, time);
         }
-
-        if (c == 'b') {
-          //MOVE BACKWARDS
-          //expecting a format of '[power (0-9)] [time (0-9)]'
-          char space1 = client.read(); //empty space read
-          char power = client.read();
-          char space2 = client.read(); //empty space read
-          char time = client.read();
-
-          String outputmessage = "Going backwards at power and time: ";
-          outputmessage += power;
-          outputmessage += ' ';
-          outputmessage += time;
-          Serial.println(outputmessage);
-
-          //converting the chars to ints
-          int itime = time - '0';
-          int ipower = power - '0';
-
-          go_backward(ipower, itime);
+        else if (c == 'b') {
+          char _ = client.read();
+          int power = client.read() - '0';
+          _ = client.read();
+          int time = client.read() - '0';
+          go_backward(power, time);
         }
-
-        if (c == 'l') {
-          //ROTATE LEFT
-          //expecting a format of '[power (0-9)] [time (0-9)]'
-          char space1 = client.read(); //empty space read
-          char power = client.read();
-          char space2 = client.read(); //empty space read
-          char time = client.read();
-
-          String outputmessage = "Rotating left at power and time: ";
-          outputmessage += power;
-          outputmessage += ' ';
-          outputmessage += time;
-          Serial.println(outputmessage);
-
-          //converting the chars to ints
-          int itime = time - '0';
-          int ipower = power - '0';
-
-          turn_left(ipower, itime);
+        else if (c == 'l') {
+          char _ = client.read();
+          int power = client.read() - '0';
+          _ = client.read();
+          int time = client.read() - '0';
+          turn_left(power, time);
         }
-
-        if (c == 'r') {
-          //ROTATE RIGHT
-          //expecting a format of '[power (0-9)] [time (0-9)]'
-          char space1 = client.read(); //empty space read
-          char power = client.read();
-          char space2 = client.read(); //empty space read
-          char time = client.read();
-
-          String outputmessage = "Rotating right at power and time: ";
-          outputmessage += power;
-          outputmessage += ' ';
-          outputmessage += time;
-          Serial.println(outputmessage);
-
-          //converting the chars to ints
-          int itime = time - '0';
-          int ipower = power - '0';
-
-          turn_right(ipower, itime);
+        else if (c == 'r') {
+          char _ = client.read();
+          int power = client.read() - '0';
+          _ = client.read();
+          int time = client.read() - '0';
+          turn_right(power, time);
         }
-
-        if (c == 'a') {
-          //TRANSLATE LEFT
-          //expecting a format of '[power (0-9)] [time (0-9)]'
-          char space1 = client.read(); //empty space read
-          char power = client.read();
-          char space2 = client.read(); //empty space read
-          char time = client.read();
-
-          String outputmessage = "Going left at power and time: ";
-          outputmessage += power;
-          outputmessage += ' ';
-          outputmessage += time;
-          Serial.println(outputmessage);
-
-          //converting the chars to ints
-          int itime = time - '0';
-          int ipower = power - '0';
-
-          translate_left(ipower, itime);
+        else if (c == 'a') {
+          char _ = client.read();
+          int power = client.read() - '0';
+          _ = client.read();
+          int time = client.read() - '0';
+          translate_left(power, time);
         }
-
-        if (c == 'd') {
-          //TRANSLATE RIGHT
-          //expecting a format of '[power (0-9)] [time (0-9)]'
-          char space1 = client.read(); //empty space read
-          char power = client.read();
-          char space2 = client.read(); //empty space read
-          char time = client.read();
-
-          String outputmessage = "Going right at power and time: ";
-          outputmessage += power;
-          outputmessage += ' ';
-          outputmessage += time;
-          Serial.println(outputmessage);
-
-          //converting the chars to ints
-          int itime = time - '0';
-          int ipower = power - '0';
-
-          translate_right(ipower, itime);
+        else if (c == 'd') {
+          char _ = client.read();
+          int power = client.read() - '0';
+          _ = client.read();
+          int time = client.read() - '0';
+          translate_right(power, time);
         }
-
-        // === SAMPLE SERVO CONTROL ===
-        if (c == 'o') {
+        else if (c == 'o') {
           servo_open();
           Serial.println("O function triggered");
         }
-        if (c == 'p') {
+        else if (c == 'p') {
           servo_close();
           Serial.println("P function triggered");
         }
 
-        client.write(c);         // Echo back to client
+        // Echo command back for acknowledgement
+        client.write(c);
+      }
+
+      // --- Send distance data periodically ---
+      if (millis() - lastSend >= 200) { // every 200ms
+        int dist = readDistance();
+        Serial.print("Distance: ");
+        if (dist == -1) Serial.println("No echo");
+        else Serial.print(dist), Serial.println(" cm");
+
+        // Send distance to client
+        client.print("DIST:");
+        if (dist == -1) client.println("N/A");
+        else client.println(dist);
+
+        lastSend = millis();
       }
     }
+
     client.stop();
     Serial.println("Client disconnected.");
   }
