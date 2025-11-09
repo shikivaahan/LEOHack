@@ -20,7 +20,7 @@ ARDUINO_PORT = 8080
 # ----- Pose process settings -----
 POSE_UDP_HOST = "127.0.0.1"
 POSE_UDP_PORT = 5005
-POSE_URL = "http://192.168.4.2/capture"   # your ESP32 snapshot endpoint
+POSE_URL = "http://192.168.4.4/capture"   # your ESP32 snapshot endpoint
 POSE_TAG_SIZE_M = 0.10
 POSE_SHOW_WINDOW = True  # set False to hide camera window
 POSE_POLL_FPS = 10       # snapshot poll rate
